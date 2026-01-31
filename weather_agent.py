@@ -1,7 +1,11 @@
 from dotenv import load_dotenv
-from openai import OpenAI
-import requests
 import json
+from typing import Optional
+from urllib.parse import quote
+
+from openai import OpenAI
+from pydantic import BaseModel, Field
+import requests
 
 load_dotenv()
 
@@ -9,47 +13,52 @@ client = OpenAI()
 
 
 def weather_tool(location: str) -> str:
-    print("🔨 Tool Called: get_weather", location)
-    
-    url = f"https://wttr.in/{location}?format=%C+%t"
-    response = requests.get(url)
+    print("Tool Called: get_weather", location)
+
+    safe_location = quote(location.strip())
+    url = f"https://wttr.in/{safe_location}?format=%C+%t"
+    try:
+        response = requests.get(url, timeout=10)
+    except requests.RequestException as exc:
+        return f"Weather lookup failed: {exc}"
 
     if response.status_code == 200:
         return f"The weather in {location} is {response.text}."
-    return "Something went wrong"
+    return f"Weather lookup failed with status {response.status_code}."
 
 
 system_prompt = """
-    You are an helpful AI aegent who is specialized in resolving user query.
-    You work on start, plan, action observe mode.
-    For the given user query and available tools, plan the step by step execution, based on the planning, select the relevant tool from the available tool. and based on the tool selection you perform an action to call the tool.
-    Wait for the observation and based on the observation from the tool call resolve the user query.
+You are a helpful AI agent specialized in resolving user queries.
+You operate in plan, action, observe, final_answer steps.
+For the given user query and available tools, plan the step-by-step execution.
+Based on the plan, select the relevant tool and perform an action to call it.
+Wait for the observation and, based on that, resolve the user query.
 
-    Rules:
-    - Always respond in a single JSON object.
-    - Always perform one step at a time and wait for next input.
-    - The possible steps are: plan, action, observe, final_answer.
-    - Carefully follow the structure for each step:
-    
-    Output Structure:
-    {{
-        step: "plan" | "action" | "observe" | "final_answer",
-        content: "string",          // For "plan" and "final_answer" steps
-        tool: "The name of the tool",             // For "action" step
-        tool_input: "string",
-    }}
-    
-    Available Tools:
-    - weather_tool(location: str) -> str
-    
-    Example:
-    User Query: "What's the weather like in New York City today?"
-    Output: {"step":"plan", "content":"The user is interested in weather data of New York City, so I will use the weather tool to get the data."}
-    Output: {"step":"plan", "content":"From the available tools, I will use the weather tool to get the weather data of New York City."}
-    Output: {"step":"action", "tool":"weather_tool", "tool_input":"New York City"}
-    Output: {"step":"observe", "observation":"The weather in New York City today is sunny with a high of 75F and a low of 60F."}
-    Output: {"step":"final_answer", "content":"The weather in New York City today is sunny with a high of 75F and a low of 60F."}
-"""
+Rules:
+- Always respond in a single JSON object.
+- Always perform one step at a time and wait for next input.
+- The possible steps are: plan, action, observe, final_answer.
+- Follow the structure for each step.
+
+Output Structure:
+{
+  "step": "plan" | "action" | "observe" | "final_answer",
+  "content": "string",          // For "plan" and "final_answer" steps
+  "tool": "The name of the tool",             // For "action" step
+  "tool_input": "string",        // For "action" step
+  "observation": "string"        // For "observe" step
+}
+
+Available Tools:
+- weather_tool(location: str) -> str
+
+Example:
+User Query: "What's the weather like in New York City today?"
+Output: {"step":"plan","content":"The user wants weather data, so I will call the weather tool."}
+Output: {"step":"action","tool":"weather_tool","tool_input":"New York City"}
+Output: {"step":"observe","observation":"The weather in New York City is Sunny +75F."}
+Output: {"step":"final_answer","content":"The weather in New York City is Sunny +75F."}
+""".strip()
 
 available_tools = {
     "weather_tool": {
@@ -58,30 +67,39 @@ available_tools = {
     }
 }
 
-messages = [
-    {"role": "system", "content": system_prompt},
-]
-user_query = input("> ")
 
+class OutputFormat(BaseModel):
+    step: str = Field(..., description="The current step in the agent's process.")
+    content: Optional[str] = Field(None, description="Content for 'plan' and 'final_answer' steps.")
+    tool: Optional[str] = Field(None, description="The name of the tool to be used in 'action' step.")
+    tool_input: Optional[str] = Field(None, description="Input for the tool in 'action' step.")
+    observation: Optional[str] = Field(None, description="Observation from the tool in 'observe' step.")
+
+
+messages = [{"role": "system", "content": system_prompt}]
+user_query = input("> ").strip()
 messages.append({"role": "user", "content": user_query})
+
 while True:
-    response = client.chat.completions.create(
+    response = client.chat.completions.parse(
         model="gpt-4o",
-        response_format={"type": "json_object"},
+        response_format=OutputFormat,
         messages=messages,
     )
-    parsed_output = json.loads(response.choices[0].message.content)
-    print(f"Agent Output: {parsed_output}")
-    messages.append({"role": "assistant", "content": json.dumps(parsed_output)})
+    parsed_output = response.choices[0].message.parsed
+    parsed_dict = parsed_output.model_dump()
 
-    step = parsed_output.get("step")
+    print(f"Agent Output: {parsed_dict}")
+    messages.append({"role": "assistant", "content": json.dumps(parsed_dict)})
+
+    step = parsed_output.step
     if step == "plan":
-        print(f"{parsed_output.get('content')}")
+        print(parsed_output.content or "")
         continue
 
     if step == "action":
-        tool_name = parsed_output.get("tool")
-        tool_input = parsed_output.get("tool_input")
+        tool_name = parsed_output.tool or ""
+        tool_input = parsed_output.tool_input or ""
         if tool_name in available_tools:
             observation = available_tools[tool_name]["fn"](tool_input)
         else:
@@ -93,9 +111,9 @@ while True:
         continue
 
     if step == "observe":
-        print(f"{parsed_output.get('observation')}")
+        print(parsed_output.observation or "")
         continue
 
     if step == "final_answer":
-        print(f"{parsed_output.get('content')}")
+        print(parsed_output.content or "")
         break

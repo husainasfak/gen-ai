@@ -31,3 +31,44 @@ Example: “My startup is a B2B SaaS for fleet management in Germany. Write an e
 
 #### Multimodal Prompting: You combine text + images (or other inputs) for the task.
 Example: “Here’s my UI screenshot—suggest improvements and write the updated microcopy.”
+
+<br/>
+<br/>
+<br/>
+<br/>
+
+
+# Prompt Serialization Styles
+### 1. Alpaca Prompt
+
+    ### Instructions: <System_prompt> \n
+    ### Input: <User_query>
+    ### Response:\n
+
+### 2. ChatML format - OpenAI, Gemini
+
+    
+    {
+        "role":"system" | "user" | "assistant", 
+        "content":"string"
+    }
+
+
+### 3. INST Prompting
+
+    [INST] user_query [/INST]
+
+
+
+
+
+
+
+
+# RAG
+1. Indexing phase
+![alt text](image.png)
+
+
+2. Retriveal
+![alt text](image-1.png)
